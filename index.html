@@ -7,7 +7,259 @@
     <!-- Import AR.js and Three.js libraries -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://raw.githack.com/AR-js-org/AR.js/master/three.js/build/ar.js"></script>
+    <!-- TensorFlow.js for object detection --><!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AR Ball Detector</title>
+    <!-- Import AR.js and Three.js libraries (updated links) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r132/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/AR.js/2.3.1/aframe-ar.js"></script>
     <!-- TensorFlow.js for object detection -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow/3.15.0/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2/dist/coco-ssd.min.js"></script>
+    
+    <!-- Add explicit notification about camera access -->
+    <script>
+    window.onload = function() {
+        // Force camera permission dialog
+        navigator.mediaDevices.getUserMedia({ video: true })
+            .then(function(stream) {
+                console.log("Camera access granted");
+                document.getElementById('info').innerText = "Camera access granted. Starting AR...";
+            })
+            .catch(function(err) {
+                console.error("Camera access denied:", err);
+                document.getElementById('info').innerText = "Camera access denied. Please allow camera access and reload.";
+            });
+    };
+    </script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 5px;
+            font-family: Arial, sans-serif;
+        }
+        #debugCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 10;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">AR Ball Detector</div>
+    <canvas id="debugCanvas"></canvas>
+
+    <script>
+        // Initialize variables
+        let camera, scene, renderer, arToolkitSource, arToolkitContext;
+        let model, video;
+        let detectionCanvas, detectionContext;
+        let balls = [];
+
+        // Setup AR environment
+        function init() {
+            // Display initialization status
+            document.getElementById('info').innerText = 'Initializing AR environment...';
+            
+            // Add fallback for direct camera access if AR.js fails
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                document.getElementById('info').innerText = 'Camera API not supported in your browser';
+                return;
+            }
+            // Setup scene
+            scene = new THREE.Scene();
+            
+            // Setup camera
+            camera = new THREE.Camera();
+            scene.add(camera);
+            
+            // Setup renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+            
+            // Setup AR source (camera video stream)
+            arToolkitSource = new THREEx.ArToolkitSource({ sourceType: 'webcam' });
+            arToolkitSource.init(() => {
+                setTimeout(() => {
+                    onResize();
+                }, 2000);
+            });
+            
+            // Setup AR context with default camera parameters
+            arToolkitContext = new THREEx.ArToolkitContext({
+                cameraParametersUrl: 'https://raw.githubusercontent.com/AR-js-org/AR.js/master/data/data/camera_para.dat',
+                detectionMode: 'color_and_matrix',
+            });
+            arToolkitContext.init(() => {
+                camera.projectionMatrix.copy(arToolkitContext.getProjectionMatrix());
+            });
+            
+            // Handle resize events
+            window.addEventListener('resize', onResize);
+            
+            // Setup debug canvas for drawing detection boxes
+            detectionCanvas = document.getElementById('debugCanvas');
+            detectionCanvas.width = window.innerWidth;
+            detectionCanvas.height = window.innerHeight;
+            detectionContext = detectionCanvas.getContext('2d');
+            
+            // Load TensorFlow model for object detection
+            loadObjectDetectionModel();
+        }
+        
+        // Handle window resize
+        function onResize() {
+            arToolkitSource.onResize();
+            arToolkitSource.copySizeTo(renderer.domElement);
+            if (arToolkitContext.arController !== null) {
+                arToolkitSource.copySizeTo(arToolkitContext.arController.canvas);
+            }
+            detectionCanvas.width = window.innerWidth;
+            detectionCanvas.height = window.innerHeight;
+        }
+        
+        // Load TensorFlow.js COCO-SSD model
+        async function loadObjectDetectionModel() {
+            try {
+                document.getElementById('info').innerText = 'Loading object detection model...';
+                model = await cocoSsd.load();
+                document.getElementById('info').innerText = 'Model loaded. Detecting balls...';
+                // Start video for detection
+                video = arToolkitSource.domElement;
+                // Start detection loop
+                detectObjects();
+            } catch (error) {
+                console.error('Error loading model:', error);
+                document.getElementById('info').innerText = 'Error loading model. Please refresh.';
+            }
+        }
+        
+        // Detect objects in the video stream
+        async function detectObjects() {
+            if (!model || !video) return;
+            
+            try {
+                // Run detection
+                const predictions = await model.detect(video);
+                
+                // Clear previous detections
+                detectionContext.clearRect(0, 0, detectionCanvas.width, detectionCanvas.height);
+                balls = [];
+                
+                // Process detections
+                for (let i = 0; i < predictions.length; i++) {
+                    const prediction = predictions[i];
+                    
+                    // Filter for ball-like objects (sports ball, apple, orange, etc.)
+                    if (['sports ball', 'apple', 'orange', 'baseball', 'tennis ball', 'basketball'].includes(prediction.class)) {
+                        const [x, y, width, height] = prediction.bbox;
+                        const score = prediction.score;
+                        
+                        // Store detected ball
+                        balls.push({
+                            x, y, width, height,
+                            confidence: score,
+                            type: prediction.class
+                        });
+                        
+                        // Draw bounding box
+                        detectionContext.strokeStyle = '#00FF00';
+                        detectionContext.lineWidth = 4;
+                        detectionContext.strokeRect(x, y, width, height);
+                        
+                        // Draw label
+                        detectionContext.fillStyle = '#00FF00';
+                        detectionContext.font = '18px Arial';
+                        detectionContext.fillText(
+                            `${prediction.class} (${Math.round(score * 100)}%)`,
+                            x, y > 20 ? y - 5 : y + 20
+                        );
+                        
+                        // Draw circle marker in 3D space (AR visualization)
+                        addBallMarker(x + width/2, y + height/2, Math.max(width, height));
+                    }
+                }
+                
+                // Update info text
+                document.getElementById('info').innerText = 
+                    balls.length > 0 ? `Detected ${balls.length} ball(s)` : 'Looking for balls...';
+                    
+            } catch (error) {
+                console.error('Detection error:', error);
+            }
+            
+            // Continue detection loop
+            requestAnimationFrame(detectObjects);
+        }
+        
+        // Add 3D marker for detected ball in AR space
+        function addBallMarker(x, y, size) {
+            // Convert 2D screen position to normalized device coordinates
+            const normalizedX = (x / window.innerWidth) * 2 - 1;
+            const normalizedY = -(y / window.innerHeight) * 2 + 1;
+            
+            // Create a temporary ball marker in AR space
+            const radius = size / 100;  // Scale based on detected size
+            const geometry = new THREE.SphereGeometry(radius, 32, 32);
+            const material = new THREE.MeshBasicMaterial({
+                color: 0x00ff00,
+                transparent: true,
+                opacity: 0.7,
+                wireframe: true
+            });
+            
+            const ballMarker = new THREE.Mesh(geometry, material);
+            
+            // Estimate Z position (this is approximate and would need refinement)
+            // In a full implementation, you would use depth estimation techniques
+            const z = -2;  // Place marker at fixed distance initially
+            
+            ballMarker.position.set(normalizedX * z, normalizedY * z, z);
+            scene.add(ballMarker);
+            
+            // Remove marker after short delay to prevent cluttering scene
+            setTimeout(() => {
+                scene.remove(ballMarker);
+            }, 100);
+        }
+        
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            if (arToolkitSource.ready) {
+                arToolkitContext.update(arToolkitSource.domElement);
+            }
+            
+            renderer.render(scene, camera);
+        }
+        
+        // Initialize and start
+        init();
+        animate();
+    </script>
+</body>
+</html>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
