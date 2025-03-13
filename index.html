@@ -1,15 +1,3 @@
-// Request camera permission explicitly
-navigator.mediaDevices.getUserMedia({video: true})
-  .then(stream => {
-    console.log("Camera permission granted");
-    // Initialize AR after permission
-    init();
-  })
-  .catch(err => {
-    console.error("Camera permission denied:", err);
-    document.getElementById('info').innerText = 'Camera permission denied. Please allow camera access.';
-  });
-
 <!DOCTYPE html>
 <html>
 <head>
